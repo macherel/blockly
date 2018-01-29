@@ -187,7 +187,8 @@ Blockly.BlockDragger.prototype.dragBlock = function(e, currentDragDeltaXY) {
   var xy = new goog.math.Coordinate(e.clientX, e.clientY);
   var rect = this.workspace_.getParentSvg().getBoundingClientRect();
   rect = new goog.math.Rect(rect.left, rect.top, rect.width, rect.height);
-  if(!rect.contains(xy)) { // The dragging bloc is out of his workspace
+  if(Blockly.selected && Blockly.selected === this.draggingBlock_ && !rect.contains(xy)) {
+    // The dragging bloc is out of his workspace
     // Find the new workspace
     var workspaces = [];
     // loop used instead of Object.values cause of missing polyfill for IE
@@ -197,55 +198,54 @@ Blockly.BlockDragger.prototype.dragBlock = function(e, currentDragDeltaXY) {
     var workspace;
     // loop used instead of Array.prototype.find cause of missing polyfill for IE
     for(var i = 0; i<workspaces.length && workspace === undefined; i++) {
-      var rect = workspaces[i].getParentSvg().getBoundingClientRect();
-      rect = new goog.math.Rect(rect.left, rect.top, rect.width, rect.height);
-      if(rect.contains(xy)) {
+      var newRect = workspaces[i].getParentSvg().getBoundingClientRect();
+      newRect = new goog.math.Rect(newRect.left, newRect.top, newRect.width, newRect.height);
+      if(newRect.contains(xy)) {
         workspace = workspaces[i];
       }
     }
     if(workspace) {
-      var block = this.draggingBlock_;
-      var oldBoundingClientRect = this.workspace_.getCanvas().parentNode.getBoundingClientRect();
+      // the dragging block is changing workspace,
+      // a new block will be created in the new workspace and will be deleted in the current workspace
+      // Drag the new block is done by simulating mouse events
+      this.draggingBlock_.unselect(); // Unselect block to avoid cycle
+
+      // Prepare mouse events
       var newBoundingClientRect = workspace.getCanvas().parentNode.getBoundingClientRect();
-      var oldMetrics = this.workspace_.getMetrics();
-      var newMetrics = workspace.getMetrics();
+      var mousedownX = newBoundingClientRect.left + workspace.scrollX
+        + (e.clientX - this.draggingBlock_.getSvgRoot().getBoundingClientRect().x);
+      var mousedownY = newBoundingClientRect.top + workspace.scrollY
+        + (e.clientY - this.draggingBlock_.getSvgRoot().getBoundingClientRect().y);
+      if(workspace.toolbox_) {
+        if(workspace.toolbox_.horizontalLayout_) {
+          mousedownY += workspace.toolbox_.getHeight();
+        } else {
+          mousedownX += workspace.toolbox_.getWidth();
+        }
+      }
+      var mouseup = document.createEvent ('MouseEvents');
+      mouseup.initMouseEvent("mouseup", true, true,
+        window, 0, rect.left, rect.top, rect.left, rect.top, false, false, false, false, 0, null);
+      var mousedown = document.createEvent ('MouseEvents');
+      mousedown.initMouseEvent("mousedown", true, true,
+        window, 0, mousedownX, mousedownY, mousedownX, mousedownY, false, false, false, false, 0, null);
+      var mousemove = document.createEvent ('MouseEvents');
+      mousemove.initMouseEvent("mousemove", true, true,
+        window, 0, e.screenX, e.screenY, e.clientX, e.clientY, false, false, false, false, 0, null);
 
-      // Update the current BlockDragger to the new workspace
-      this.workspace_.removeTopBlock(block);
-      workspace.addTopBlock(block);
-      block.svgGroup_.parentNode.removeChild(block.svgGroup_);
-      workspace.getCanvas().appendChild(block.svgGroup_);
-      var oldWorkspaceToolboxWidth = this.workspace_.toolbox_?this.workspace_.toolbox_.getWidth():0;
-      var newWorkspaceToolboxWidth = workspace.toolbox_?workspace.toolbox_.getWidth():0;
-      var deltaX = (oldWorkspaceToolboxWidth - newWorkspaceToolboxWidth);
-      var deltaY = 0;
-      deltaX += Math.min(newWorkspaceToolboxWidth, newMetrics.viewLeft);
-      deltaX -= Math.min(oldWorkspaceToolboxWidth, oldMetrics.viewLeft);
-      deltaY += Math.min(0, newMetrics.viewTop);
-      deltaY -= Math.min(0, oldMetrics.viewTop);
-      this.draggedConnectionManager_ = new Blockly.DraggedConnectionManager(this.draggingBlock_);
-      this.startXY_.x += (oldBoundingClientRect.left - newBoundingClientRect.left) + deltaX;
-      this.startXY_.y += (oldBoundingClientRect.top - newBoundingClientRect.top) + deltaY;
-      this.draggingBlock_ = block;
-      this.workspace_ = workspace;
-
-      // Get alls blocks to move from the current workspace to the new one
-      var blocks = [block];
-      var i = 0;
-      do {
-        blocks = blocks.concat(blocks[i].getChildren());
-        i++;
-      } while(i !== blocks.length);
-
-      // Move all blocks from the old workspace to the new one
+      // Create new block and dispatch events
+      var xml = Blockly.Xml.blockToDom(this.draggingBlock_);
+      var block = Blockly.Xml.domToBlock(xml, workspace);
       var blockDragger = this;
-      blocks.forEach(function(block) {
-        delete blockDragger.workspace_.blockDB_[block.id];
-        workspace.blockDB_[block.id] = block;
-        block.workspace = workspace;
-      });
-
-      this.startBlockDrag(currentDragDeltaXY);
+      setTimeout(function() {
+        var draggingBlock = blockDragger.draggingBlock_;
+        if(draggingBlock) {
+          draggingBlock.getSvgRoot().dispatchEvent(mouseup);
+          draggingBlock.dispose();
+          block.getSvgRoot().dispatchEvent(mousedown);
+          block.getSvgRoot().dispatchEvent(mousemove);
+        }
+      },0);
     }
   }
 
